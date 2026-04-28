@@ -245,104 +245,105 @@ def decode_frame_to_udp(frame: np.ndarray, corr_threshold: float = 0.8) -> bytes
     # print(f"Total decode time: {time.time() - t0} sec")
     # return result
 
-cap = cv2.VideoCapture(PATH_TO_VIDEO)
-frame_count = 0
-while cap.isOpened() and frame_count < 4:
-    frame_count += 1
-    success, frame = cap.read()
-    if not success:
-        break
-    h, w = frame.shape[:2]
-    print(f"Original: {w}×{h}")
-    
-    frame_proc = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+if __name__ == "__main__":
+    cap = cv2.VideoCapture(PATH_TO_VIDEO)
+    frame_count = 0
+    while cap.isOpened() and frame_count < 4:
+        frame_count += 1
+        success, frame = cap.read()
+        if not success:
+            break
+        h, w = frame.shape[:2]
+        print(f"Original: {w}×{h}")
+        
+        frame_proc = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
 
-    # Read the image
-    img = frame_proc.copy()
+        # Read the image
+        img = frame_proc.copy()
 
-    # Encode to JPEG binary using OpenCV
-    start_time = time.time()
-    params = [(cv2.IMWRITE_JPEG_QUALITY), 30, int(cv2.IMWRITE_JPEG_RST_INTERVAL), 1]  # Adjust interval; smaller = more resilient but larger file
-    success, jpg_bytes = cv2.imencode('.jpg', img, params)
-    if not success:
-        raise ValueError("Failed to encode image")
+        # Encode to JPEG binary using OpenCV
+        start_time = time.time()
+        params = [(cv2.IMWRITE_JPEG_QUALITY), 30, int(cv2.IMWRITE_JPEG_RST_INTERVAL), 1]  # Adjust interval; smaller = more resilient but larger file
+        success, jpg_bytes = cv2.imencode('.jpg', img, params)
+        if not success:
+            raise ValueError("Failed to encode image")
 
-    # Parse
-    start_parse = time.time()
-    header, compressed = jpg_parse(jpg_bytes.tobytes())
-    print("compressed length is: " + str(len(compressed)))
-    print("compressed first 10 vals are: " + str(compressed[:10].hex()))
+        # Parse
+        start_parse = time.time()
+        header, compressed = jpg_parse(jpg_bytes.tobytes())
+        print("compressed length is: " + str(len(compressed)))
+        print("compressed first 10 vals are: " + str(compressed[:10].hex()))
 
-    # Encode to frame
-    HEADERS_SYNC_PATTERN, protected_headers, DATA_SYNC_PATTERN, protected_data, END_SYNC_PATTERN = encode_udp_to_frame(header, compressed)
+        # Encode to frame
+        HEADERS_SYNC_PATTERN, protected_headers, DATA_SYNC_PATTERN, protected_data, END_SYNC_PATTERN = encode_udp_to_frame(header, compressed)
 
-    full_stream = np.concatenate((
-        HEADERS_SYNC_PATTERN,
-        protected_headers,
-        DATA_SYNC_PATTERN,
-        protected_data,
-        END_SYNC_PATTERN
-    ))
-    print(f"[encode] Full stream length: {len(full_stream)} bits")
-    
-    total_pixels = FRAME_WIDTH * FRAME_HEIGHT
-    if len(full_stream) > total_pixels:
-        raise ValueError(f"Data too large: {len(full_stream)} bits > {total_pixels} pixels")
-    
-    full_stream = ((full_stream + 1) / 2 * 255).astype(np.uint8)
-    full_stream = np.pad(full_stream, (0, total_pixels - len(full_stream)), 'constant')
-    frame = full_stream.reshape((FRAME_HEIGHT, FRAME_WIDTH))
+        full_stream = np.concatenate((
+            HEADERS_SYNC_PATTERN,
+            protected_headers,
+            DATA_SYNC_PATTERN,
+            protected_data,
+            END_SYNC_PATTERN
+        ))
+        print(f"[encode] Full stream length: {len(full_stream)} bits")
+        
+        total_pixels = FRAME_WIDTH * FRAME_HEIGHT
+        if len(full_stream) > total_pixels:
+            raise ValueError(f"Data too large: {len(full_stream)} bits > {total_pixels} pixels")
+        
+        full_stream = ((full_stream + 1) / 2 * 255).astype(np.uint8)
+        full_stream = np.pad(full_stream, (0, total_pixels - len(full_stream)), 'constant')
+        frame = full_stream.reshape((FRAME_HEIGHT, FRAME_WIDTH))
 
-    print(f"Parsed JPEG in {time.time() - start_parse} seconds")
-    noisy = protected_data.copy()
-    noisy = ((noisy + 1) / 2 * 255).astype(np.uint8)  # Maps -1 to 0, 1 to 255
-    noise_mask = np.random.choice([0, 255], size=noisy.shape, p=[0.99, 0.01]).astype(np.uint8)  # 1% bit flips
-    noisy ^= noise_mask
-
-
-    full_stream_final = np.concatenate((
-        HEADERS_SYNC_PATTERN,
-        protected_headers,
-        DATA_SYNC_PATTERN,
-        noisy,
-        END_SYNC_PATTERN
-    ))
-    
-    print(f"[debug] Full stream final length before conversion: {len(full_stream_final)} bits")
-    total_pixels = FRAME_WIDTH * FRAME_HEIGHT
-    if len(full_stream_final) > total_pixels:
-        raise ValueError(f"Data too large: {len(full_stream_final)} bits > {total_pixels} pixels")
-
-    full_stream_final = ((full_stream_final + 1) / 2 * 255).astype(np.uint8)
-    full_stream_final = np.pad(full_stream_final, (0, total_pixels - len(full_stream_final)), 'constant')  # Pad to match frame size
-    frame_final = full_stream_final.reshape((FRAME_HEIGHT, FRAME_WIDTH))
-    cv2.imwrite(f"encoded_{frame_count}.png", frame_final)
-    print(f"Encoded frame {frame_count} saved.")
+        print(f"Parsed JPEG in {time.time() - start_parse} seconds")
+        noisy = protected_data.copy()
+        noisy = ((noisy + 1) / 2 * 255).astype(np.uint8)  # Maps -1 to 0, 1 to 255
+        noise_mask = np.random.choice([0, 255], size=noisy.shape, p=[0.99, 0.01]).astype(np.uint8)  # 1% bit flips
+        noisy ^= noise_mask
 
 
-    # Decode from frame
-    start_decode = time.time()
-    data_bytes, decoded_headers = decode_frame_to_udp(frame_final)
-    print("data_bytes length is: " + str(len(data_bytes)))
-    print("data_bytes first 10 vals are: " + str(data_bytes[:10].hex()))
+        full_stream_final = np.concatenate((
+            HEADERS_SYNC_PATTERN,
+            protected_headers,
+            DATA_SYNC_PATTERN,
+            noisy,
+            END_SYNC_PATTERN
+        ))
+        
+        print(f"[debug] Full stream final length before conversion: {len(full_stream_final)} bits")
+        total_pixels = FRAME_WIDTH * FRAME_HEIGHT
+        if len(full_stream_final) > total_pixels:
+            raise ValueError(f"Data too large: {len(full_stream_final)} bits > {total_pixels} pixels")
 
-    start_fix = time.time()
-    fixed_compressed = fix_false_markers(data_bytes)
-    print(f"Fixed false markers in {time.time() - start_fix} seconds")
+        full_stream_final = ((full_stream_final + 1) / 2 * 255).astype(np.uint8)
+        full_stream_final = np.pad(full_stream_final, (0, total_pixels - len(full_stream_final)), 'constant')  # Pad to match frame size
+        frame_final = full_stream_final.reshape((FRAME_HEIGHT, FRAME_WIDTH))
+        cv2.imwrite(f"encoded_{frame_count}.png", frame_final)
+        print(f"Encoded frame {frame_count} saved.")
 
 
-    # Build back
-    start_rebuild = time.time()
-    rebuilt_bytes = jpg_build(decoded_headers, fixed_compressed)
-    print(f"Rebuilt JPEG in {time.time() - start_rebuild} seconds")
+        # Decode from frame
+        start_decode = time.time()
+        data_bytes, decoded_headers = decode_frame_to_udp(frame_final)
+        print("data_bytes length is: " + str(len(data_bytes)))
+        print("data_bytes first 10 vals are: " + str(data_bytes[:10].hex()))
 
-    # Decode back with OpenCV to verify
-    rebuilt_img = cv2.imdecode(np.frombuffer(rebuilt_bytes, np.uint8), cv2.IMREAD_COLOR)
-    print(f"Total processing time: {time.time() - start_time} seconds")
-    if rebuilt_img is None:
-        raise ValueError("Failed to decode rebuilt image")
-    print("Rebuilt image shape:", rebuilt_img.shape)  # Should match original image shape
+        start_fix = time.time()
+        fixed_compressed = fix_false_markers(data_bytes)
+        print(f"Fixed false markers in {time.time() - start_fix} seconds")
 
-    # Save the rebuilt image to verify visually
-    cv2.imwrite("rebuilt_image.jpg", rebuilt_img)
-    # print("Rebuilt image saved as 'rebuilt_image.jpg'")
+
+        # Build back
+        start_rebuild = time.time()
+        rebuilt_bytes = jpg_build(decoded_headers, fixed_compressed)
+        print(f"Rebuilt JPEG in {time.time() - start_rebuild} seconds")
+
+        # Decode back with OpenCV to verify
+        rebuilt_img = cv2.imdecode(np.frombuffer(rebuilt_bytes, np.uint8), cv2.IMREAD_COLOR)
+        print(f"Total processing time: {time.time() - start_time} seconds")
+        if rebuilt_img is None:
+            raise ValueError("Failed to decode rebuilt image")
+        print("Rebuilt image shape:", rebuilt_img.shape)  # Should match original image shape
+
+        # Save the rebuilt image to verify visually
+        cv2.imwrite("rebuilt_image.jpg", rebuilt_img)
+        # print("Rebuilt image saved as 'rebuilt_image.jpg'")
