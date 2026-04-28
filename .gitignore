@@ -4,3 +4,4 @@ matanVenv/
 __pycache__/
 *.bin
 d2a2d/*
+venv/*
